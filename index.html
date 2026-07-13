@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Calendar Puzzle</title>
+<style>
+  :root{
+    --cell: 54px;
+    --board-bg: #f3e6cd;
+    --cell-bg: #fbf3e2;
+    --cell-line: #c9b48f;
+    --wood: #d8b98c;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:#2b2f36; color:#e9edf2; padding:18px; -webkit-user-select:none; user-select:none;
+  }
+  h1{font-size:20px;margin:0 0 2px;}
+  .sub{color:#9aa4b1;font-size:13px;margin:0 0 14px;}
+  .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;}
+  .controls label{font-size:13px;color:#c4ccd6;}
+  select,button{
+    font:inherit;font-size:13px;padding:7px 11px;border-radius:8px;border:1px solid #3d444e;
+    background:#3a4049;color:#e9edf2;cursor:pointer;transition:.12s;
+  }
+  button:hover,select:hover{background:#454c57;}
+  button.primary{background:#3d7eff;border-color:#3d7eff;color:#fff;font-weight:600;}
+  button.primary:hover{background:#2f6fee;}
+  button:active{transform:translateY(1px);}
+  .stage{position:relative;margin:0;touch-action:none;}
+  .cell{
+    position:absolute;width:var(--cell);height:var(--cell);
+    background:var(--cell-bg);border:1px solid var(--cell-line);
+    display:flex;align-items:center;justify-content:center;
+    font-size:15px;font-weight:600;color:#5a4a2e;border-radius:4px;
+  }
+  .cell.month{font-size:13px;}
+  .cell.target{box-shadow:inset 0 0 0 3px #2bbf6a;background:#dff7e8;color:#0c7a40;}
+  .board-frame{
+    position:absolute;border-radius:14px;background:var(--wood);
+    box-shadow:0 8px 24px rgba(0,0,0,.4), inset 0 0 0 6px #c8a374;
+  }
+  .piece{position:absolute;cursor:grab;filter:drop-shadow(0 3px 4px rgba(0,0,0,.35));z-index:5;}
+  .piece.dragging{cursor:grabbing;z-index:50;filter:drop-shadow(0 8px 14px rgba(0,0,0,.5));}
+  .piece.selected{z-index:40;}
+  .piece .pc{
+    position:absolute;width:var(--cell);height:var(--cell);border-radius:5px;
+    border:1px solid rgba(0,0,0,.18);
+  }
+  .piece.selected .pc{outline:3px solid #fff;outline-offset:-3px;}
+  .piece.wrong .pc{outline:3px solid #ff4d4d;outline-offset:-3px;animation:buzz .5s ease 3;}
+  .piece.hintnew .pc{outline:3px solid #ffd34d;outline-offset:-3px;animation:pop .35s ease 2;}
+  @keyframes buzz{0%,100%{transform:translateX(0)}25%{transform:translateX(-2px)}75%{transform:translateX(2px)}}
+  @keyframes pop{0%,100%{filter:brightness(1)}50%{filter:brightness(1.4)}}
+  .solcount{font-size:13px;color:#9aa4b1;margin:-6px 0 6px;}
+  .solcount .num{color:#e9edf2;font-weight:700;}
+  .msg{min-height:20px;margin:-4px 0 12px;font-size:13px;}
+  .msg.ok{color:#5fd38a;}
+  .msg.warn{color:#ffb454;}
+  .msg.bad{color:#ff7676;}
+  .tray-label{position:absolute;color:#7d8794;font-size:12px;letter-spacing:.5px;text-transform:uppercase;}
+  .banner{
+    position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+    background:rgba(15,18,22,.78);z-index:200;
+  }
+  .banner .card{background:#1f242b;padding:32px 40px;border-radius:16px;text-align:center;
+    border:1px solid #2bbf6a;box-shadow:0 0 40px rgba(43,191,106,.4);}
+  .banner h2{margin:0 0 8px;font-size:26px;color:#2bbf6a;}
+  .banner p{margin:0 0 18px;color:#c4ccd6;}
+  .hint{font-size:12px;color:#7d8794;margin-top:10px;line-height:1.5;}
+  kbd{background:#3a4049;border:1px solid #555c66;border-radius:4px;padding:1px 6px;font-size:11px;}
+</style>
+</head>
+<body>
+  <h1>Calendar Puzzle 🧩</h1>
+  <p class="sub">Cover the whole board with the 8 pieces so the <b>only</b> two open squares are today's month &amp; day.</p>
+
+  <div class="controls">
+    <label>Month <select id="monthSel"></select></label>
+    <label>Day <select id="daySel"></select></label>
+    <button id="todayBtn">Today</button>
+    <span style="width:10px"></span>
+    <button id="rotateBtn">⟳ Rotate</button>
+    <button id="flipBtn">⇄ Flip</button>
+    <button id="clearBtn">Clear board</button>
+    <button id="hintBtn">Hint 💡</button>
+    <button id="solveBtn" class="primary">Solve it ✨</button>
+  </div>
+
+  <div id="solCount" class="solcount">Number of solutions: <span class="num">…</span></div>
+  <div id="msg" class="msg"></div>
+
+  <div class="stage" id="stage"></div>
+
+  <p class="hint">
+    Drag a piece onto the board — it snaps to the grid and won't overlap others.
+    Click a piece to select it, then <kbd>R</kbd> to rotate or <kbd>F</kbd> to flip (or use the buttons).
+    Drag a piece back below the board to remove it.
+  </p>
+
+  <div class="banner" id="banner">
+    <div class="card">
+      <h2>Solved! 🎉</h2>
+      <p id="bannerDate"></p>
+      <button class="primary" onclick="document.getElementById('banner').style.display='none'">Nice</button>
+    </div>
+  </div>
+
+<script>
+const CELL = 54;
+const COLS = 7, ROWS = 7;
+const BOARDX = 16, BOARDY = 16;
+
+// ---------- board definition ----------
+const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const labels = {};            // "r,c" -> {kind, m or d, text}
+function setCell(r,c,o){ labels[r+','+c]=o; }
+for(let c=0;c<6;c++) setCell(0,c,{kind:'month',m:c,text:months[c]});
+for(let c=0;c<6;c++) setCell(1,c,{kind:'month',m:c+6,text:months[c+6]});
+let dd=1;
+for(let r=2;r<=5;r++) for(let c=0;c<7;c++){ setCell(r,c,{kind:'day',d:dd,text:String(dd)}); dd++; }
+for(let c=0;c<3;c++){ setCell(6,c,{kind:'day',d:dd,text:String(dd)}); dd++; }
+const valid = new Set(Object.keys(labels));
+
+// ---------- pieces ----------
+const PIECE_DEFS = {
+  V:    {color:'#8e5fc0', cells:[[0,0],[1,0],[2,0],[2,1],[2,2]]},
+  Y:    {color:'#cdd84a', cells:[[0,1],[1,0],[1,1],[1,2],[1,3]]},
+  L:    {color:'#8ed24f', cells:[[0,0],[1,0],[2,0],[3,0],[3,1]]},
+  U:    {color:'#e8412f', cells:[[0,0],[0,1],[1,0],[2,0],[2,1]]},
+  RECT: {color:'#f5c518', cells:[[0,0],[0,1],[0,2],[1,0],[1,1],[1,2]]},
+  N:    {color:'#1f86d8', cells:[[0,1],[1,1],[2,0],[2,1],[3,0]]},
+  Z:    {color:'#e84393', cells:[[0,0],[0,1],[1,1],[2,1],[2,2]]},
+  P:    {color:'#49b9ec', cells:[[0,0],[0,1],[1,0],[1,1],[2,1]]},
+};
+const ORDER = Object.keys(PIECE_DEFS);
+
+// ---------- geometry helpers ----------
+function normalize(cells){
+  const minr=Math.min(...cells.map(p=>p[0])), minc=Math.min(...cells.map(p=>p[1]));
+  return cells.map(([r,c])=>[r-minr,c-minc]).sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+}
+const okey = cs => cs.map(p=>p[0]+':'+p[1]).join('|');
+const rot  = cs => cs.map(([r,c])=>[c,-r]);   // clockwise
+const rotCCW = cs => cs.map(([r,c])=>[-c,r]); // counter-clockwise
+const mir  = cs => cs.map(([r,c])=>[r,-c]);
+function orientations(cells){
+  const seen=new Map();
+  for(let f=0;f<2;f++){
+    let cur = f? mir(cells):cells.slice();
+    for(let i=0;i<4;i++){ cur=rot(cur); const n=normalize(cur); seen.set(okey(n),n); }
+  }
+  return [...seen.values()];
+}
+const ORIS = {}; for(const k of ORDER) ORIS[k]=orientations(PIECE_DEFS[k].cells);
+
+// ---------- game state ----------
+let target = {m:5, d:10};         // default Jun 10 (today)
+const pieces = ORDER.map((name,i)=>({
+  name, color:PIECE_DEFS[name].color,
+  ori: normalize(PIECE_DEFS[name].cells),
+  placed:false, row:0, col:0,
+  x:0, y:0,                       // float pixel pos (tray)
+}));
+let selected = null;
+
+// tray slots laid out to the RIGHT of the board (4 columns x 2 rows)
+const trayX0 = BOARDX + COLS*CELL + 50;
+const trayTop = BOARDY + 22;
+function defaultTraySlot(i){
+  const col=i%4, row=Math.floor(i/4);
+  return { x: trayX0 + col*225, y: trayTop + row*235 };
+}
+pieces.forEach((p,i)=>{ const s=defaultTraySlot(i); p.x=s.x; p.y=s.y; });
+
+// ---------- DOM build ----------
+const stage = document.getElementById('stage');
+const stageW = trayX0 + 4*225 + 10;
+const stageH = Math.max(BOARDY + ROWS*CELL + 20, trayTop + 1*235 + 220 + 10);
+stage.style.width = stageW+'px';
+stage.style.height = stageH+'px';
+
+// board frame
+const frame = document.createElement('div');
+frame.className='board-frame';
+frame.style.left=(BOARDX-10)+'px'; frame.style.top=(BOARDY-10)+'px';
+frame.style.width=(COLS*CELL+20)+'px'; frame.style.height=(ROWS*CELL+20)+'px';
+stage.appendChild(frame);
+
+// board cells
+const cellEls = {};
+for(const key of valid){
+  const [r,c]=key.split(',').map(Number);
+  const el=document.createElement('div');
+  const l=labels[key];
+  el.className='cell '+(l.kind==='month'?'month':'day');
+  el.textContent=l.text;
+  el.style.left=(BOARDX+c*CELL)+'px';
+  el.style.top=(BOARDY+r*CELL)+'px';
+  stage.appendChild(el);
+  cellEls[key]=el;
+}
+
+// tray labels
+const trayLbl=document.createElement('div');
+trayLbl.className='tray-label';
+trayLbl.textContent='Pieces';
+trayLbl.style.left=trayX0+'px'; trayLbl.style.top=BOARDY+'px';
+stage.appendChild(trayLbl);
+
+// piece elements
+pieces.forEach(p=>{
+  const el=document.createElement('div');
+  el.className='piece';
+  el.dataset.name=p.name;
+  p.el=el;
+  stage.appendChild(el);
+  el.addEventListener('pointerdown', e=>startDrag(e,p));
+});
+
+function renderPiece(p){
+  const el=p.el;
+  el.innerHTML='';
+  let maxr=0,maxc=0;
+  for(const [r,c] of p.ori){ maxr=Math.max(maxr,r); maxc=Math.max(maxc,c);
+    const d=document.createElement('div');
+    d.className='pc'; d.style.background=p.color;
+    d.style.left=(c*CELL)+'px'; d.style.top=(r*CELL)+'px';
+    el.appendChild(d);
+  }
+  el.style.width=((maxc+1)*CELL)+'px';
+  el.style.height=((maxr+1)*CELL)+'px';
+  if(p.placed){ el.style.left=(BOARDX+p.col*CELL)+'px'; el.style.top=(BOARDY+p.row*CELL)+'px'; }
+  else { el.style.left=p.x+'px'; el.style.top=p.y+'px'; }
+  el.classList.toggle('selected', selected===p);
+}
+function render(){ pieces.forEach(renderPiece); }
+
+// ---------- occupancy / placement ----------
+function occupancy(ignore){
+  const occ=new Map();
+  for(const p of pieces){ if(!p.placed||p===ignore) continue;
+    for(const [r,c] of p.ori) occ.set((p.row+r)+','+(p.col+c), p.name);
+  }
+  return occ;
+}
+function canPlace(p,row,col){
+  const occ=occupancy(p);
+  for(const [r,c] of p.ori){
+    const k=(row+r)+','+(col+c);
+    if(!valid.has(k)) return false;
+    if(occ.has(k)) return false;
+  }
+  return true;
+}
+
+// ---------- drag ----------
+let drag=null;
+function startDrag(e,p){
+  if(e.button!==0) return;              // left button only; right-click is handled by the flip listener
+  e.preventDefault();
+  clearHints(); if(msgEl.textContent) showMsg('','');
+  const wasSelected = (selected===p);
+  selected=p;
+  const rect=stage.getBoundingClientRect();
+  const px = p.placed? BOARDX+p.col*CELL : p.x;
+  const py = p.placed? BOARDY+p.row*CELL : p.y;
+  p.x=px; p.y=py;                       // anchor float coords to current spot
+  drag={p, offX:e.clientX-rect.left-px, offY:e.clientY-rect.top-py,
+        startCX:e.clientX, startCY:e.clientY, moved:false, wasSelected};
+  p.placed=false;
+  p.el.classList.add('dragging');
+  p.el.setPointerCapture(e.pointerId);
+  render();
+}
+function onMove(e){
+  if(!drag) return;
+  const {p,offX,offY}=drag;
+  if(!drag.moved && Math.hypot(e.clientX-drag.startCX, e.clientY-drag.startCY)>4) drag.moved=true;
+  const rect=stage.getBoundingClientRect();
+  p.x=e.clientX-rect.left-offX;
+  p.y=e.clientY-rect.top-offY;
+  p.el.style.left=p.x+'px'; p.el.style.top=p.y+'px';
+}
+function onUp(e){
+  if(!drag) return;
+  const p=drag.p;
+  p.el.classList.remove('dragging');
+  const col=Math.round((p.x-BOARDX)/CELL);
+  const row=Math.round((p.y-BOARDY)/CELL);
+  if(canPlace(p,row,col)){ p.placed=true; p.row=row; p.col=col; }
+  else { p.placed=false; }              // stays floating where dropped
+  // a click (no drag) on an already-selected piece deselects it
+  if(!drag.moved && drag.wasSelected) selected=null;
+  drag=null;
+  render(); checkWin();
+}
+stage.addEventListener('pointermove', onMove);
+stage.addEventListener('pointerup', onUp);
+stage.addEventListener('pointercancel', onUp);
+
+// ---------- rotate / flip selected ----------
+function transformPiece(p, fn){
+  if(!p) return;
+  selected=p;
+  const newOri=normalize(fn(p.ori));
+  p.ori=newOri;
+  if(p.placed && !canPlace(p,p.row,p.col)){   // rotation no longer fits → pop out
+    p.placed=false; p.x=BOARDX+p.col*CELL; p.y=BOARDY+p.row*CELL;
+  }
+  render(); checkWin();
+}
+function transform(fn){ transformPiece(selected, fn); }
+document.getElementById('rotateBtn').onclick=()=>transform(rot);
+document.getElementById('flipBtn').onclick=()=>transform(mir);
+window.addEventListener('keydown',e=>{
+  if(e.key==='r'||e.key==='R') transform(rot);
+  if(e.key==='f'||e.key==='F') transform(mir);
+});
+// wheel rotates the SELECTED piece (up/down = opposite directions), wherever the cursor is
+window.addEventListener('wheel', e=>{
+  if(!selected) return;
+  e.preventDefault();
+  transformPiece(selected, e.deltaY>0 ? rot : rotCCW);
+}, {passive:false});
+// right-click flips the SELECTED piece, wherever the cursor is
+window.addEventListener('contextmenu', e=>{
+  if(!selected) return;
+  e.preventDefault();
+  transformPiece(selected, mir);
+});
+
+// ---------- target / win ----------
+function targetKeys(){
+  let mk,dk;
+  for(const key of valid){ const l=labels[key];
+    if(l.kind==='month'&&l.m===target.m) mk=key;
+    if(l.kind==='day'&&l.d===target.d) dk=key;
+  }
+  return [mk,dk];
+}
+function highlightTargets(){
+  for(const key in cellEls) cellEls[key].classList.remove('target');
+  for(const k of targetKeys()) if(k) cellEls[k].classList.add('target');
+}
+function checkWin(){
+  const occ=occupancy(null);
+  const uncovered=[...valid].filter(k=>!occ.has(k));
+  const allPlaced=pieces.every(p=>p.placed);
+  if(allPlaced && uncovered.length===2){
+    const tk=new Set(targetKeys());
+    if(uncovered.every(k=>tk.has(k))){
+      document.getElementById('bannerDate').textContent=
+        months[target.m]+' '+target.d+' — perfectly solved.';
+      document.getElementById('banner').style.display='flex';
+    }
+  }
+}
+
+// ---------- solver: complete the board given some pieces fixed in place ----------
+// fixedList: [{name, cells:[[r,c]...]}]. Returns full solution map name->{cells} or null.
+function solveWithFixed(fixedList){
+  const occ=new Set();
+  for(const key of valid){ const l=labels[key];
+    if(l.kind==='month'&&l.m===target.m) occ.add(key);
+    if(l.kind==='day'&&l.d===target.d) occ.add(key);
+  }
+  const used={}; const result={};
+  for(const f of fixedList){
+    for(const [r,c] of f.cells){ const k=r+','+c;
+      if(!valid.has(k)||occ.has(k)) return null;   // off-board, on a target cell, or overlapping
+      occ.add(k);
+    }
+    result[f.name]={cells:f.cells.map(c=>c.slice())}; used[f.name]=true;
+  }
+  function findEmpty(){
+    for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){const k=r+','+c; if(valid.has(k)&&!occ.has(k))return[r,c];}
+    return null;
+  }
+  function rec(){
+    const e=findEmpty(); if(!e) return true;
+    const [er,ec]=e;
+    for(const pk of ORDER){
+      if(used[pk]) continue;
+      for(const ori of ORIS[pk]){
+        for(const anchor of ori){
+          const dr=er-anchor[0], dc=ec-anchor[1];
+          let ok=true; const placed=[];
+          for(const [r,c] of ori){const rr=r+dr,cc=c+dc,kk=rr+','+cc;
+            if(!valid.has(kk)||occ.has(kk)){ok=false;break;} placed.push([rr,cc]);}
+          if(!ok) continue;
+          placed.forEach(([r,c])=>occ.add(r+','+c));
+          used[pk]=true; result[pk]={cells:placed.slice()};
+          if(rec()) return true;
+          placed.forEach(([r,c])=>occ.delete(r+','+c));
+          used[pk]=false; delete result[pk];
+        }
+      }
+    }
+    return false;
+  }
+  return rec()? result : null;
+}
+
+// count ALL distinct solutions for a date (full exhaustive search, ignores current pieces)
+function countSolutions(tm,td){
+  const occ=new Set();
+  for(const key of valid){ const l=labels[key];
+    if(l.kind==='month'&&l.m===tm) occ.add(key);
+    if(l.kind==='day'&&l.d===td) occ.add(key);
+  }
+  const used={}; let n=0;
+  function findEmpty(){
+    for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){const k=r+','+c; if(valid.has(k)&&!occ.has(k))return[r,c];}
+    return null;
+  }
+  function rec(){
+    const e=findEmpty(); if(!e){ n++; return; }
+    const [er,ec]=e;
+    for(const pk of ORDER){
+      if(used[pk]) continue;
+      for(const ori of ORIS[pk]){
+        for(const anchor of ori){
+          const dr=er-anchor[0], dc=ec-anchor[1];
+          let ok2=true; const pl=[];
+          for(const [r,c] of ori){const kk=(r+dr)+','+(c+dc);
+            if(!valid.has(kk)||occ.has(kk)){ok2=false;break;} pl.push(kk);}
+          if(!ok2) continue;
+          pl.forEach(k=>occ.add(k)); used[pk]=true;
+          rec();
+          pl.forEach(k=>occ.delete(k)); used[pk]=false;
+        }
+      }
+    }
+  }
+  rec(); return n;
+}
+const solCountEl=document.getElementById('solCount');
+function refreshCount(){
+  solCountEl.innerHTML='Number of solutions: <span class="num">counting…</span>';
+  const m=target.m, d=target.d;
+  setTimeout(()=>{
+    if(target.m!==m||target.d!==d) return;          // date changed again before we ran
+    const n=countSolutions(m,d);
+    if(target.m!==m||target.d!==d) return;
+    solCountEl.innerHTML='Number of solutions: <span class="num">'+n.toLocaleString()+'</span>';
+  },20);
+}
+
+// absolute cells a placed piece currently occupies
+const absCells = p => p.ori.map(([r,c])=>[p.row+r, p.col+c]);
+function placePieceFromCells(p, cells){
+  const minr=Math.min(...cells.map(c=>c[0])), minc=Math.min(...cells.map(c=>c[1]));
+  p.ori=normalize(cells); p.row=minr; p.col=minc; p.placed=true;
+}
+
+// ---------- messaging + highlight helpers ----------
+const msgEl=document.getElementById('msg');
+function showMsg(text, cls){ msgEl.textContent=text; msgEl.className='msg '+(cls||''); }
+function clearHints(){ pieces.forEach(p=>p.el.classList.remove('wrong','hintnew')); }
+const LABEL={V:'purple',Y:'yellow',L:'green',U:'red',RECT:'gold',N:'blue',Z:'pink',P:'light-blue'};
+
+// ---------- Solve ----------
+document.getElementById('solveBtn').onclick=()=>{
+  clearHints();
+  const sol=solveWithFixed([]);
+  if(!sol){ showMsg('No solution found (unexpected).','bad'); return; }
+  for(const p of pieces) placePieceFromCells(p, sol[p.name].cells);
+  selected=null; render();
+  showMsg('Solved for '+months[target.m]+' '+target.d+'.','ok');
+  checkWin();
+};
+
+// ---------- Hint ----------
+document.getElementById('hintBtn').onclick=()=>{
+  clearHints();
+  const placedPieces = pieces.filter(p=>p.placed);
+  const fixedList = placedPieces.map(p=>({name:p.name, cells:absCells(p)}));
+
+  // 1) Can the board still be finished with everything where it is?
+  const completion = solveWithFixed(fixedList);
+  if(completion){
+    const unplaced = pieces.filter(p=>!p.placed);
+    if(unplaced.length===0){ showMsg('Everything is placed correctly — you’ve got it!','ok'); checkWin(); return; }
+    const p = unplaced[0];
+    placePieceFromCells(p, completion[p.name].cells);
+    selected=null; render();
+    p.el.classList.add('hintnew');
+    showMsg('No mistakes so far — placed the '+LABEL[p.name]+' piece for you.','ok');
+    checkWin();
+    return;
+  }
+
+  // 2) Not finishable → find which placed piece(s) are wrong.
+  // A piece is "definitely wrong" if NO solution exists with it exactly there.
+  const defWrong = placedPieces.filter(p=>!solveWithFixed([{name:p.name, cells:absCells(p)}]));
+  if(defWrong.length){
+    defWrong.forEach(p=>p.el.classList.add('wrong'));
+    const names=defWrong.map(p=>LABEL[p.name]).join(', ');
+    showMsg('These can’t be part of any solution here: '+names+'. Move them and try again.','bad');
+    return;
+  }
+
+  // 3) Each piece is individually fine but they conflict with each other.
+  const culprits = placedPieces.filter(p=>{
+    const rest = placedPieces.filter(q=>q!==p).map(q=>({name:q.name, cells:absCells(q)}));
+    return solveWithFixed(rest);   // removing p makes it solvable
+  });
+  if(culprits.length){
+    culprits.forEach(p=>p.el.classList.add('wrong'));
+    showMsg('Your pieces conflict. Moving one of these would fix it: '
+      +culprits.map(p=>LABEL[p.name]).join(', ')+'.','warn');
+  } else {
+    showMsg('Several pieces conflict — clear a couple and use Hint again.','warn');
+  }
+};
+
+// ---------- clear ----------
+document.getElementById('clearBtn').onclick=()=>{
+  pieces.forEach((p,i)=>{ const s=defaultTraySlot(i); p.placed=false; p.x=s.x; p.y=s.y;
+    p.ori=normalize(PIECE_DEFS[p.name].cells); });
+  selected=null; clearHints(); showMsg('',''); render();
+};
+
+// ---------- date controls ----------
+const monthSel=document.getElementById('monthSel'), daySel=document.getElementById('daySel');
+months.forEach((m,i)=>{ const o=document.createElement('option'); o.value=i; o.textContent=m; monthSel.appendChild(o); });
+const dim=[31,29,31,30,31,30,31,31,30,31,30,31];
+function fillDays(){
+  const max=dim[target.m]; const cur=Math.min(target.d,max);
+  daySel.innerHTML='';
+  for(let i=1;i<=max;i++){ const o=document.createElement('option'); o.value=i; o.textContent=i; daySel.appendChild(o); }
+  target.d=cur; daySel.value=cur;
+}
+function setDate(m,d){ target.m=m; monthSel.value=m; fillDays(); target.d=Math.min(d,dim[m]); daySel.value=target.d; highlightTargets(); refreshCount(); }
+monthSel.onchange=()=>{ target.m=+monthSel.value; fillDays(); highlightTargets(); clearHints(); showMsg('',''); refreshCount(); };
+daySel.onchange=()=>{ target.d=+daySel.value; highlightTargets(); clearHints(); showMsg('',''); refreshCount(); };
+document.getElementById('todayBtn').onclick=()=>{ const n=new Date(); setDate(n.getMonth(), n.getDate()); };
+
+// ---------- init ----------
+const now=new Date();
+setDate(now.getMonth(), now.getDate());
+render();
+</script>
+</body>
+</html>
