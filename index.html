@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Calendar Puzzle</title>
 <style>
   :root{
@@ -42,7 +42,8 @@
     position:absolute;border-radius:14px;background:var(--wood);
     box-shadow:0 8px 24px rgba(0,0,0,.4), inset 0 0 0 6px #c8a374;
   }
-  .piece{position:absolute;cursor:grab;filter:drop-shadow(0 3px 4px rgba(0,0,0,.35));z-index:5;}
+  .piece{position:absolute;cursor:grab;touch-action:none;filter:drop-shadow(0 3px 4px rgba(0,0,0,.35));z-index:5;}
+  .piece.in-drawer{position:relative;margin:2px;cursor:grab;filter:drop-shadow(0 2px 3px rgba(0,0,0,.3));}
   .piece.dragging{cursor:grabbing;z-index:50;filter:drop-shadow(0 8px 14px rgba(0,0,0,.5));}
   .piece.selected{z-index:40;}
   .piece .pc{
@@ -71,6 +72,44 @@
   .banner p{margin:0 0 18px;color:#c4ccd6;}
   .hint{font-size:12px;color:#7d8794;margin-top:10px;line-height:1.5;}
   kbd{background:#3a4049;border:1px solid #555c66;border-radius:4px;padding:1px 6px;font-size:11px;}
+
+  /* full-screen layer that a piece is lifted onto while being dragged */
+  #dragLayer{position:fixed;inset:0;pointer-events:none;z-index:150;}
+  #dragLayer .piece{pointer-events:auto;}
+
+  /* ---------- mobile drawer (bottom sheet) ---------- */
+  .mobile-only{display:none;}
+  .drawer{display:none;}
+  .drawer-empty{color:#7d8794;font-size:13px;text-align:center;width:100%;padding:22px 10px;}
+
+  body.mobile{padding:12px 12px 84px;}
+  body.mobile h1{font-size:18px;}
+  body.mobile .sub{font-size:12px;margin-bottom:10px;}
+  body.mobile .controls{gap:6px;}
+  body.mobile .desktop-only{display:none;}
+  body.mobile .mobile-only{display:block;}
+  body.mobile .tray-label{display:none;}
+  body.mobile .cell{font-size:13px;}
+  body.mobile .cell.month{font-size:11px;}
+
+  body.mobile .drawer{
+    display:block;position:fixed;left:0;right:0;bottom:0;z-index:120;
+    background:#22262d;border-top:1px solid #3d444e;border-radius:16px 16px 0 0;
+    box-shadow:0 -8px 24px rgba(0,0,0,.45);
+  }
+  .drawer-handle{
+    width:100%;border:0;border-radius:16px 16px 0 0;background:#2d323b;color:#e9edf2;
+    font-weight:600;padding:12px;font-size:14px;cursor:pointer;text-align:center;
+    display:flex;align-items:center;justify-content:center;gap:8px;
+  }
+  .drawer-handle .chev{transition:transform .2s;}
+  .drawer.open .drawer-handle .chev{transform:rotate(180deg);}
+  .drawer-body{
+    display:none;padding:10px 10px calc(10px + env(safe-area-inset-bottom));
+    max-height:46vh;overflow-y:auto;touch-action:pan-y;
+    gap:6px;flex-wrap:wrap;justify-content:center;align-items:flex-start;
+  }
+  .drawer.open .drawer-body{display:flex;}
 </style>
 </head>
 <body>
@@ -94,11 +133,24 @@
 
   <div class="stage" id="stage"></div>
 
-  <p class="hint">
+  <p class="hint desktop-only">
     Drag a piece onto the board — it snaps to the grid and won't overlap others.
     Click a piece to select it, then <kbd>R</kbd> to rotate or <kbd>F</kbd> to flip (or use the buttons).
     Drag a piece back below the board to remove it.
   </p>
+  <p class="hint mobile-only">
+    Open the <b>Pieces</b> drawer below and drag a piece onto the board. Tap a piece to select it,
+    then use <b>⟳ Rotate</b> / <b>⇄ Flip</b>. Drag a placed piece off the board to send it back.
+  </p>
+
+  <div class="drawer open" id="drawer">
+    <button class="drawer-handle" id="drawerHandle">🧩 Pieces <span class="chev">▲</span></button>
+    <div class="drawer-body" id="drawerBody">
+      <div class="drawer-empty" id="drawerEmpty" style="display:none">All pieces are on the board.</div>
+    </div>
+  </div>
+
+  <div id="dragLayer"></div>
 
   <div class="banner" id="banner">
     <div class="card">
@@ -109,9 +161,11 @@
   </div>
 
 <script>
-const CELL = 54;
+const BASE_CELL = 54;
 const COLS = 7, ROWS = 7;
-const BOARDX = 16, BOARDY = 16;
+const MOBILE_BP = 820;
+// geometry is recomputed responsively in layout()
+let CELL = BASE_CELL, BOARDX = 16, BOARDY = 16, mobile = false;
 
 // ---------- board definition ----------
 const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -166,10 +220,10 @@ const pieces = ORDER.map((name,i)=>({
 }));
 let selected = null;
 
-// tray slots laid out to the RIGHT of the board (4 columns x 2 rows)
-const trayX0 = BOARDX + COLS*CELL + 50;
-const trayTop = BOARDY + 22;
+// tray slots laid out to the RIGHT of the board (desktop) — 4 columns
+// computed against the fixed desktop geometry so positions are stable.
 function defaultTraySlot(i){
+  const trayX0 = 16 + COLS*BASE_CELL + 50, trayTop = 16 + 22;
   const col=i%4, row=Math.floor(i/4);
   return { x: trayX0 + col*225, y: trayTop + row*235 };
 }
@@ -177,16 +231,14 @@ pieces.forEach((p,i)=>{ const s=defaultTraySlot(i); p.x=s.x; p.y=s.y; });
 
 // ---------- DOM build ----------
 const stage = document.getElementById('stage');
-const stageW = trayX0 + 4*225 + 10;
-const stageH = Math.max(BOARDY + ROWS*CELL + 20, trayTop + 1*235 + 220 + 10);
-stage.style.width = stageW+'px';
-stage.style.height = stageH+'px';
+const drawer = document.getElementById('drawer');
+const drawerBody = document.getElementById('drawerBody');
+const drawerEmpty = document.getElementById('drawerEmpty');
+const dragLayer = document.getElementById('dragLayer');
 
 // board frame
 const frame = document.createElement('div');
 frame.className='board-frame';
-frame.style.left=(BOARDX-10)+'px'; frame.style.top=(BOARDY-10)+'px';
-frame.style.width=(COLS*CELL+20)+'px'; frame.style.height=(ROWS*CELL+20)+'px';
 stage.appendChild(frame);
 
 // board cells
@@ -197,18 +249,50 @@ for(const key of valid){
   const l=labels[key];
   el.className='cell '+(l.kind==='month'?'month':'day');
   el.textContent=l.text;
-  el.style.left=(BOARDX+c*CELL)+'px';
-  el.style.top=(BOARDY+r*CELL)+'px';
+  el.dataset.r=r; el.dataset.c=c;
   stage.appendChild(el);
   cellEls[key]=el;
 }
 
-// tray labels
+// tray label (desktop only)
 const trayLbl=document.createElement('div');
 trayLbl.className='tray-label';
 trayLbl.textContent='Pieces';
-trayLbl.style.left=trayX0+'px'; trayLbl.style.top=BOARDY+'px';
 stage.appendChild(trayLbl);
+
+// ---------- responsive layout ----------
+// Recomputes CELL + board geometry and positions the board for the current
+// viewport. Board cells resize via the --cell CSS var; positions set here.
+function positionBoard(){
+  document.documentElement.style.setProperty('--cell', CELL+'px');
+  frame.style.left=(BOARDX-10)+'px'; frame.style.top=(BOARDY-10)+'px';
+  frame.style.width=(COLS*CELL+20)+'px'; frame.style.height=(ROWS*CELL+20)+'px';
+  for(const key in cellEls){
+    const el=cellEls[key];
+    el.style.left=(BOARDX + (+el.dataset.c)*CELL)+'px';
+    el.style.top =(BOARDY + (+el.dataset.r)*CELL)+'px';
+  }
+}
+function layout(){
+  mobile = window.innerWidth < MOBILE_BP;
+  document.body.classList.toggle('mobile', mobile);
+  if(mobile){
+    BOARDX = 12; BOARDY = 12;
+    const avail = window.innerWidth - BOARDX*2;
+    CELL = Math.max(34, Math.min(58, Math.floor((avail - 20) / COLS)));
+    stage.style.width  = (BOARDX*2 + COLS*CELL)+'px';
+    stage.style.height = (BOARDY*2 + ROWS*CELL)+'px';
+  } else {
+    CELL = BASE_CELL; BOARDX = 16; BOARDY = 16;
+    const trayX0 = BOARDX + COLS*CELL + 50, trayTop = BOARDY + 22;
+    trayLbl.style.left=trayX0+'px'; trayLbl.style.top=BOARDY+'px';
+    stage.style.width  = (trayX0 + 4*225 + 10)+'px';
+    stage.style.height = Math.max(BOARDY + ROWS*CELL + 20, trayTop + 235 + 220 + 10)+'px';
+  }
+  positionBoard();
+  render();
+  updateDrawerEmpty();
+}
 
 // piece elements
 pieces.forEach(p=>{
@@ -232,11 +316,34 @@ function renderPiece(p){
   }
   el.style.width=((maxc+1)*CELL)+'px';
   el.style.height=((maxr+1)*CELL)+'px';
-  if(p.placed){ el.style.left=(BOARDX+p.col*CELL)+'px'; el.style.top=(BOARDY+p.row*CELL)+'px'; }
-  else { el.style.left=p.x+'px'; el.style.top=p.y+'px'; }
   el.classList.toggle('selected', selected===p);
+
+  // the piece being dragged lives on the drag layer — its position is
+  // controlled by the drag handlers, so don't reparent/reposition it here.
+  if(drag && drag.p===p) return;
+
+  if(p.placed){
+    if(el.parentNode!==stage) stage.appendChild(el);
+    el.classList.remove('in-drawer');
+    el.style.position='absolute';
+    el.style.left=(BOARDX+p.col*CELL)+'px'; el.style.top=(BOARDY+p.row*CELL)+'px';
+  } else if(mobile){
+    if(el.parentNode!==drawerBody) drawerBody.appendChild(el);
+    el.classList.add('in-drawer');
+    el.style.position=''; el.style.left=''; el.style.top='';
+  } else {
+    if(el.parentNode!==stage) stage.appendChild(el);
+    el.classList.remove('in-drawer');
+    el.style.position='absolute';
+    el.style.left=p.x+'px'; el.style.top=p.y+'px';
+  }
 }
 function render(){ pieces.forEach(renderPiece); }
+function updateDrawerEmpty(){
+  if(!mobile){ return; }
+  const any = pieces.some(p=>!p.placed && !(drag && drag.p===p));
+  drawerEmpty.style.display = any ? 'none' : 'block';
+}
 
 // ---------- occupancy / placement ----------
 function occupancy(ignore){
@@ -257,49 +364,62 @@ function canPlace(p,row,col){
 }
 
 // ---------- drag ----------
+// Dragging happens on a fixed full-screen layer in *client* coordinates, so a
+// piece can move freely between the board (inside the stage) and the drawer.
 let drag=null;
 function startDrag(e,p){
-  if(e.button!==0) return;              // left button only; right-click is handled by the flip listener
+  if(e.pointerType==='mouse' && e.button!==0) return;   // left button only for mouse; touch/pen always
   e.preventDefault();
   clearHints(); if(msgEl.textContent) showMsg('','');
   const wasSelected = (selected===p);
   selected=p;
-  const rect=stage.getBoundingClientRect();
-  const px = p.placed? BOARDX+p.col*CELL : p.x;
-  const py = p.placed? BOARDY+p.row*CELL : p.y;
-  p.x=px; p.y=py;                       // anchor float coords to current spot
-  drag={p, offX:e.clientX-rect.left-px, offY:e.clientY-rect.top-py,
-        startCX:e.clientX, startCY:e.clientY, moved:false, wasSelected};
+  const r=p.el.getBoundingClientRect();               // current on-screen box (drawer, tray or board)
+  drag={p, offX:e.clientX-r.left, offY:e.clientY-r.top,
+        startCX:e.clientX, startCY:e.clientY, moved:false, wasSelected, pointerId:e.pointerId};
   p.placed=false;
-  p.el.classList.add('dragging');
-  p.el.setPointerCapture(e.pointerId);
-  render();
+  // collapse the drawer so the whole board is reachable while dropping
+  // (the piece rides the fixed drag layer, so this doesn't disturb the drag)
+  if(mobile) drawer.classList.remove('open');
+  // lift onto the drag layer, keeping the same visual position
+  dragLayer.appendChild(p.el);
+  p.el.classList.remove('in-drawer');
+  p.el.classList.add('dragging','selected');
+  p.el.style.position='absolute';
+  p.el.style.left=r.left+'px'; p.el.style.top=r.top+'px';
+  try{ p.el.setPointerCapture(e.pointerId); }catch(_){}
+  updateDrawerEmpty();
 }
 function onMove(e){
-  if(!drag) return;
-  const {p,offX,offY}=drag;
+  if(!drag || e.pointerId!==drag.pointerId) return;
   if(!drag.moved && Math.hypot(e.clientX-drag.startCX, e.clientY-drag.startCY)>4) drag.moved=true;
-  const rect=stage.getBoundingClientRect();
-  p.x=e.clientX-rect.left-offX;
-  p.y=e.clientY-rect.top-offY;
-  p.el.style.left=p.x+'px'; p.el.style.top=p.y+'px';
+  drag.p.el.style.left=(e.clientX-drag.offX)+'px';
+  drag.p.el.style.top =(e.clientY-drag.offY)+'px';
 }
 function onUp(e){
-  if(!drag) return;
+  if(!drag || e.pointerId!==drag.pointerId) return;
   const p=drag.p;
   p.el.classList.remove('dragging');
-  const col=Math.round((p.x-BOARDX)/CELL);
-  const row=Math.round((p.y-BOARDY)/CELL);
+  // convert the piece's top-left (client coords) into a board cell
+  const brect=stage.getBoundingClientRect();
+  const prect=p.el.getBoundingClientRect();
+  const col=Math.round((prect.left-(brect.left+BOARDX))/CELL);
+  const row=Math.round((prect.top -(brect.top +BOARDY))/CELL);
   if(canPlace(p,row,col)){ p.placed=true; p.row=row; p.col=col; }
-  else { p.placed=false; }              // stays floating where dropped
-  // a click (no drag) on an already-selected piece deselects it
+  else {
+    p.placed=false;                     // off the board → back to drawer (mobile) or float (desktop)
+    if(!mobile){ p.x=prect.left-brect.left; p.y=prect.top-brect.top; }
+  }
+  // a tap (no drag) on an already-selected piece deselects it
   if(!drag.moved && drag.wasSelected) selected=null;
   drag=null;
-  render(); checkWin();
+  render(); checkWin(); updateDrawerEmpty();
 }
-stage.addEventListener('pointermove', onMove);
-stage.addEventListener('pointerup', onUp);
-stage.addEventListener('pointercancel', onUp);
+window.addEventListener('pointermove', onMove);
+window.addEventListener('pointerup', onUp);
+window.addEventListener('pointercancel', onUp);
+
+// drawer open/close
+document.getElementById('drawerHandle').onclick=()=>drawer.classList.toggle('open');
 
 // ---------- rotate / flip selected ----------
 function transformPiece(p, fn){
@@ -321,13 +441,13 @@ window.addEventListener('keydown',e=>{
 });
 // wheel rotates the SELECTED piece (up/down = opposite directions), wherever the cursor is
 window.addEventListener('wheel', e=>{
-  if(!selected) return;
+  if(!selected || drag) return;
   e.preventDefault();
   transformPiece(selected, e.deltaY>0 ? rot : rotCCW);
 }, {passive:false});
 // right-click flips the SELECTED piece, wherever the cursor is
 window.addEventListener('contextmenu', e=>{
-  if(!selected) return;
+  if(!selected || drag) return;
   e.preventDefault();
   transformPiece(selected, mir);
 });
@@ -540,9 +660,16 @@ daySel.onchange=()=>{ target.d=+daySel.value; highlightTargets(); clearHints(); 
 document.getElementById('todayBtn').onclick=()=>{ const n=new Date(); setDate(n.getMonth(), n.getDate()); };
 
 // ---------- init ----------
+let resizeTimer=null;
+window.addEventListener('resize', ()=>{
+  clearTimeout(resizeTimer);
+  resizeTimer=setTimeout(()=>{ if(!drag) layout(); }, 120);
+});
+window.addEventListener('orientationchange', ()=>{ if(!drag) layout(); });
+
 const now=new Date();
 setDate(now.getMonth(), now.getDate());
-render();
+layout();
 </script>
 </body>
 </html>
