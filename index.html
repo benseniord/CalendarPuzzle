@@ -110,6 +110,34 @@
     gap:6px;flex-wrap:wrap;justify-content:center;align-items:flex-start;
   }
   .drawer.open .drawer-body{display:flex;}
+
+  /* ---------- play bar + leaderboard ---------- */
+  #playbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:-4px 0 12px;}
+  .timer{font-variant-numeric:tabular-nums;font-size:22px;font-weight:700;letter-spacing:.5px;min-width:76px;}
+  .chip{font-size:12px;padding:3px 9px;border-radius:999px;background:#3a4049;color:#c4ccd6;border:1px solid #4a515c;white-space:nowrap;}
+  .chip.run{background:#123a24;color:#5fd38a;border-color:#1e5c39;}
+  .chip.pause{background:#3a2f12;color:#ffb454;border-color:#5c471e;}
+  .chip.done{background:#0f2d4f;color:#7fb2ff;border-color:#1e4c86;}
+  .chip.void{background:#3a1414;color:#ff9a9a;border-color:#5c1e1e;}
+  #playerName{font:inherit;font-size:13px;padding:7px 10px;border-radius:8px;border:1px solid #3d444e;background:#2b3038;color:#e9edf2;max-width:170px;}
+  #playerName::placeholder{color:#7d8794;}
+  .lb{margin:6px 0 18px;}
+  .lb h3{font-size:15px;margin:0 0 8px;color:#e9edf2;}
+  .lb-lock{font-size:12px;color:#ffb454;margin:0 0 8px;}
+  .lb-list{display:flex;flex-direction:column;gap:4px;max-width:520px;}
+  .lb-row{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;background:#31363f;font-size:14px;}
+  .lb-row.me{background:#243447;box-shadow:inset 0 0 0 1px #3d7eff;}
+  .lb-rank{width:22px;color:#9aa4b1;font-weight:700;text-align:right;}
+  .lb-name{flex:1;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .lb-time{font-variant-numeric:tabular-nums;color:#cdd4dd;}
+  .lb-hint{font-size:13px;width:16px;text-align:center;}
+  .lb-view{font-size:12px;padding:4px 9px;border-radius:7px;}
+  .lb-view:disabled{opacity:.4;cursor:not-allowed;}
+  .lb-empty{color:#7d8794;font-size:13px;}
+  #reviewBar{display:none;align-items:center;gap:12px;margin:-4px 0 12px;padding:9px 12px;border-radius:10px;background:#243447;border:1px solid #3d7eff;font-size:14px;}
+  #reviewBar b{color:#7fb2ff;}
+  body.review .controls,body.review #playbar,body.review .drawer{pointer-events:none;opacity:.5;}
+  body.review .stage .piece{cursor:default;}
 </style>
 </head>
 <body>
@@ -129,6 +157,18 @@
   </div>
 
   <div id="solCount" class="solcount">Number of solutions: <span class="num">…</span></div>
+
+  <div id="playbar">
+    <span class="timer" id="timer">0:00.0</span>
+    <span class="chip" id="runStatus">Ready</span>
+    <input id="playerName" type="text" maxlength="40" placeholder="Your name" autocomplete="off" spellcheck="false">
+  </div>
+
+  <div id="reviewBar">
+    Viewing <b id="reviewWho"></b>'s solution
+    <button id="reviewClose">Close</button>
+  </div>
+
   <div id="msg" class="msg"></div>
 
   <div class="stage" id="stage"></div>
@@ -142,6 +182,12 @@
     Open the <b>Pieces</b> drawer below and drag a piece onto the board. Tap a piece to select it,
     then use <b>⟳ Rotate</b> / <b>⇄ Flip</b>. Drag a placed piece off the board to send it back.
   </p>
+
+  <div class="lb" id="leaderboard">
+    <h3 id="lbTitle">🏆 Leaderboard</h3>
+    <div class="lb-lock" id="lbLock">Finish this puzzle to unlock other players' solutions.</div>
+    <div class="lb-list" id="lbList"></div>
+  </div>
 
   <div class="drawer open" id="drawer">
     <button class="drawer-handle" id="drawerHandle">🧩 Pieces <span class="chev">▲</span></button>
@@ -368,6 +414,7 @@ function canPlace(p,row,col){
 // piece can move freely between the board (inside the stage) and the drawer.
 let drag=null;
 function startDrag(e,p){
+  if(reviewMode) return;                                // board is read-only while viewing a solution
   if(e.pointerType==='mouse' && e.button!==0) return;   // left button only for mouse; touch/pen always
   e.preventDefault();
   clearHints(); if(msgEl.textContent) showMsg('','');
@@ -391,7 +438,10 @@ function startDrag(e,p){
 }
 function onMove(e){
   if(!drag || e.pointerId!==drag.pointerId) return;
-  if(!drag.moved && Math.hypot(e.clientX-drag.startCX, e.clientY-drag.startCY)>4) drag.moved=true;
+  if(!drag.moved && Math.hypot(e.clientX-drag.startCX, e.clientY-drag.startCY)>4){
+    drag.moved=true;
+    if(run.state==='idle') startRun();                  // timer starts on the first real move
+  }
   drag.p.el.style.left=(e.clientX-drag.offX)+'px';
   drag.p.el.style.top =(e.clientY-drag.offY)+'px';
 }
@@ -475,6 +525,7 @@ function checkWin(){
       document.getElementById('bannerDate').textContent=
         months[target.m]+' '+target.d+' — perfectly solved.';
       document.getElementById('banner').style.display='flex';
+      onGenuineWin();
     }
   }
 }
@@ -587,15 +638,19 @@ document.getElementById('solveBtn').onclick=()=>{
   clearHints();
   const sol=solveWithFixed([]);
   if(!sol){ showMsg('No solution found (unexpected).','bad'); return; }
+  voidRun();                                    // auto-solve disqualifies this run
   for(const p of pieces) placePieceFromCells(p, sol[p.name].cells);
   selected=null; render();
-  showMsg('Solved for '+months[target.m]+' '+target.d+'.','ok');
+  showMsg('Auto-solved for '+months[target.m]+' '+target.d+' — this run won’t be posted. Clear to try for a time.','warn');
   checkWin();
 };
 
 // ---------- Hint ----------
 document.getElementById('hintBtn').onclick=()=>{
   clearHints();
+  if(run.state==='idle') startRun();            // using a hint counts as starting/playing
+  if(run.state==='running') run.usedHint=true;  // ...and flags the run
+  updateTimer();
   const placedPieces = pieces.filter(p=>p.placed);
   const fixedList = placedPieces.map(p=>({name:p.name, cells:absCells(p)}));
 
@@ -642,6 +697,7 @@ document.getElementById('clearBtn').onclick=()=>{
   pieces.forEach((p,i)=>{ const s=defaultTraySlot(i); p.placed=false; p.x=s.x; p.y=s.y;
     p.ori=normalize(PIECE_DEFS[p.name].cells); });
   selected=null; clearHints(); showMsg('',''); render();
+  resetRun();                                   // fresh puzzle attempt → reset the timer/flags
 };
 
 // ---------- date controls ----------
@@ -655,9 +711,174 @@ function fillDays(){
   target.d=cur; daySel.value=cur;
 }
 function setDate(m,d){ target.m=m; monthSel.value=m; fillDays(); target.d=Math.min(d,dim[m]); daySel.value=target.d; highlightTargets(); refreshCount(); }
-monthSel.onchange=()=>{ target.m=+monthSel.value; fillDays(); highlightTargets(); clearHints(); showMsg('',''); refreshCount(); };
-daySel.onchange=()=>{ target.d=+daySel.value; highlightTargets(); clearHints(); showMsg('',''); refreshCount(); };
-document.getElementById('todayBtn').onclick=()=>{ const n=new Date(); setDate(n.getMonth(), n.getDate()); };
+monthSel.onchange=()=>{ target.m=+monthSel.value; fillDays(); highlightTargets(); clearHints(); showMsg('',''); refreshCount(); resetRun(); refreshBoard(); };
+daySel.onchange=()=>{ target.d=+daySel.value; highlightTargets(); clearHints(); showMsg('',''); refreshCount(); resetRun(); refreshBoard(); };
+document.getElementById('todayBtn').onclick=()=>{ const n=new Date(); setDate(n.getMonth(), n.getDate()); resetRun(); refreshBoard(); };
+
+// ================= leaderboard + timed run =================
+// --- Supabase config (safe to embed: the anon key is protected by row-level security) ---
+const SUPABASE_URL = 'https://wldpuxpdpprijicmgkyu.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_L-P1gUbM3Ic9MlHMeddZ7Q_7TtKxst0';   // publishable key — safe to embed (protected by RLS)
+const sbConfigured = () => !!(SUPABASE_URL && SUPABASE_ANON_KEY);
+const sbHeaders = () => ({ apikey:SUPABASE_ANON_KEY, Authorization:'Bearer '+SUPABASE_ANON_KEY, 'Content-Type':'application/json' });
+
+// --- identity: display name + a stable anonymous player id ---
+function uuid(){ return crypto.randomUUID ? crypto.randomUUID()
+  : 'id-'+Math.random().toString(36).slice(2)+Date.now().toString(36); }
+let PID = localStorage.getItem('cp_pid'); if(!PID){ PID=uuid(); localStorage.setItem('cp_pid',PID); }
+const playerName = document.getElementById('playerName');
+playerName.value = localStorage.getItem('cp_name') || '';
+const saveName = n => localStorage.setItem('cp_name', n);
+
+// --- puzzle key ("MM-DD", year-agnostic) + memory of which puzzles this browser solved ---
+const pad2 = n => String(n).padStart(2,'0');
+const puzzleKey = () => pad2(target.m+1)+'-'+pad2(target.d);
+function solvedSet(){ try{ return new Set(JSON.parse(localStorage.getItem('cp_solved')||'[]')); }catch(_){ return new Set(); } }
+function markSolved(k){ const s=solvedSet(); s.add(k); localStorage.setItem('cp_solved', JSON.stringify([...s])); }
+const hasSolved = k => solvedSet().has(k);
+
+// --- run state + focus-aware timer ---
+const run = { state:'idle', accumMs:0, lastTs:null, usedHint:false, submitted:false, finalMs:0 };
+let pendingSubmit = false;
+const timerEl = document.getElementById('timer');
+const statusEl = document.getElementById('runStatus');
+const isActive = () => document.visibilityState==='visible' && document.hasFocus();
+const clockNow = () => performance.now();
+
+function startRun(){
+  if(run.state!=='idle') return;
+  run.state='running'; run.accumMs=0; run.submitted=false; run.finalMs=0;
+  run.lastTs = isActive() ? clockNow() : null;
+  updateTimer();
+}
+function syncActive(){                     // pause/resume as the tab loses/gains focus
+  if(run.state!=='running') return;
+  const a=isActive();
+  if(a && run.lastTs==null) run.lastTs=clockNow();
+  else if(!a && run.lastTs!=null){ run.accumMs += clockNow()-run.lastTs; run.lastTs=null; }
+  updateTimer();
+}
+function elapsedMs(){
+  if(run.state==='done'||run.state==='void') return run.finalMs;
+  return run.accumMs + (run.lastTs!=null ? clockNow()-run.lastTs : 0);
+}
+function resetRun(){
+  run.state='idle'; run.accumMs=0; run.lastTs=null; run.usedHint=false; run.submitted=false; run.finalMs=0;
+  pendingSubmit=false; updateTimer();
+}
+function voidRun(){                          // auto-solve disqualifies the run
+  if(run.state==='idle'){ run.state='void'; run.finalMs=0; }
+  else if(run.state==='running'){
+    if(run.lastTs!=null){ run.accumMs += clockNow()-run.lastTs; run.lastTs=null; }
+    run.finalMs=run.accumMs; run.state='void';
+  }
+  updateTimer();
+}
+const fmtTime = ms => { const t=Math.max(0,ms|0);
+  return Math.floor(t/60000)+':'+pad2(Math.floor(t%60000/1000))+'.'+Math.floor(t%1000/100); };
+function updateTimer(){
+  timerEl.textContent = fmtTime(elapsedMs());
+  let cls='chip', txt='Ready';
+  if(run.state==='running'){ if(isActive()){ cls='chip run'; txt='Running'; } else { cls='chip pause'; txt='Paused'; } }
+  else if(run.state==='done'){ cls='chip done'; txt='Solved ✓'+(run.usedHint?' · hint':''); }
+  else if(run.state==='void'){ cls='chip void'; txt='Auto-solved (void)'; }
+  else if(run.usedHint){ txt='Ready · hint'; }
+  statusEl.className=cls; statusEl.textContent=txt;
+}
+setInterval(()=>{ if(run.state==='running') updateTimer(); }, 150);
+document.addEventListener('visibilitychange', syncActive);
+window.addEventListener('blur', syncActive);
+window.addEventListener('focus', syncActive);
+
+// --- finishing a genuine solve → freeze, remember, submit ---
+const serializeSolution = () => pieces.filter(p=>p.placed).map(p=>({n:p.name, c:absCells(p)}));
+function onGenuineWin(){
+  if(run.state!=='running') return;          // ignore auto-solve (void) or an already-finished run
+  if(run.lastTs!=null){ run.accumMs += clockNow()-run.lastTs; run.lastTs=null; }
+  run.finalMs=run.accumMs; run.state='done';
+  markSolved(puzzleKey());
+  updateTimer(); renderBoard();               // unlocks the View buttons
+  maybeSubmit();
+}
+function maybeSubmit(){
+  if(run.submitted || run.state!=='done') return;
+  const name=(playerName.value||'').trim();
+  if(!name){ pendingSubmit=true; showMsg('Enter your name above to post your time.','warn'); playerName.focus(); return; }
+  saveName(name); pendingSubmit=false;
+  if(!sbConfigured()){ showMsg('Solved in '+fmtTime(run.finalMs)+' (leaderboard backend not configured).','ok'); return; }
+  run.submitted=true;
+  const body={ puzzle_key:puzzleKey(), player_id:PID, name, elapsed_ms:Math.round(run.finalMs),
+               used_hint:run.usedHint, solution:serializeSolution() };
+  fetch(SUPABASE_URL+'/rest/v1/scores', { method:'POST', headers:{...sbHeaders(), Prefer:'return=minimal'}, body:JSON.stringify(body) })
+    .then(res=>{ if(!res.ok) throw new Error('post '+res.status); showMsg('Posted your time: '+fmtTime(run.finalMs)+'!','ok'); refreshBoard(); })
+    .catch(()=>{ run.submitted=false; showMsg('Could not post your time (offline?).','bad'); });
+}
+playerName.addEventListener('input', ()=>saveName(playerName.value.trim()));
+playerName.addEventListener('change', ()=>{ if(pendingSubmit) maybeSubmit(); });
+playerName.addEventListener('keydown', e=>{ if(e.key==='Enter' && pendingSubmit) maybeSubmit(); });
+
+// --- leaderboard fetch + render ---
+const lbList=document.getElementById('lbList'), lbLock=document.getElementById('lbLock'), lbTitle=document.getElementById('lbTitle');
+let boardRows=[];
+function bestPerPlayer(rows){                 // rows arrive ascending by time → first seen per player is their best
+  const m=new Map();
+  for(const r of rows) if(!m.has(r.player_id)) m.set(r.player_id, r);
+  return [...m.values()];
+}
+const esc = s => String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function renderBoard(){
+  lbTitle.textContent='🏆 Leaderboard — '+months[target.m]+' '+target.d;
+  const canView = hasSolved(puzzleKey());
+  lbLock.style.display = canView ? 'none' : 'block';
+  lbList.innerHTML='';
+  if(!sbConfigured()){ lbList.innerHTML='<div class="lb-empty">Leaderboard backend not configured yet.</div>'; return; }
+  const best=bestPerPlayer(boardRows);
+  if(best.length===0){ lbList.innerHTML='<div class="lb-empty">No times yet — be the first to solve it!</div>'; return; }
+  best.forEach((r,i)=>{
+    const row=document.createElement('div'); row.className='lb-row'+(r.player_id===PID?' me':'');
+    row.innerHTML='<span class="lb-rank">'+(i+1)+'</span>'
+      +'<span class="lb-name">'+esc(r.name)+'</span>'
+      +'<span class="lb-hint">'+(r.used_hint?'💡':'')+'</span>'
+      +'<span class="lb-time">'+fmtTime(r.elapsed_ms)+'</span>';
+    const btn=document.createElement('button'); btn.className='lb-view'; btn.textContent='View';
+    btn.disabled=!canView; btn.title=canView?'View this solution':'Finish the puzzle to view solutions';
+    btn.onclick=()=>viewSolution(r);
+    row.appendChild(btn); lbList.appendChild(row);
+  });
+}
+async function refreshBoard(){
+  if(!sbConfigured()){ renderBoard(); return; }
+  const key=puzzleKey();
+  try{
+    const url=SUPABASE_URL+'/rest/v1/scores?select=*&puzzle_key=eq.'+encodeURIComponent(key)+'&order=elapsed_ms.asc,created_at.asc';
+    const res=await fetch(url,{headers:sbHeaders()});
+    if(!res.ok) throw new Error('read '+res.status);
+    const rows=await res.json();
+    if(puzzleKey()!==key) return;             // date changed while the request was in flight
+    boardRows=rows; renderBoard();
+  }catch(_){ lbList.innerHTML='<div class="lb-empty">Couldn’t load the leaderboard.</div>'; }
+}
+
+// --- view a player's solution (read-only review mode) ---
+let reviewMode=false, snapshot=null;
+const reviewBar=document.getElementById('reviewBar'), reviewWho=document.getElementById('reviewWho');
+function viewSolution(r){
+  if(!hasSolved(puzzleKey())) return;
+  const sol = typeof r.solution==='string' ? JSON.parse(r.solution) : r.solution;
+  if(!Array.isArray(sol)) return;
+  snapshot={ pieces:pieces.map(p=>({ori:p.ori.map(c=>c.slice()),row:p.row,col:p.col,placed:p.placed,x:p.x,y:p.y})) };
+  pieces.forEach(p=>{ p.placed=false; });
+  for(const s of sol){ const p=pieces.find(x=>x.name===s.n); if(p) placePieceFromCells(p, s.c); }
+  selected=null; reviewMode=true; document.body.classList.add('review');
+  render(); reviewWho.textContent=r.name; reviewBar.style.display='flex';
+}
+function closeReview(){
+  if(!snapshot) return;
+  pieces.forEach((p,i)=>{ const s=snapshot.pieces[i]; p.ori=s.ori; p.row=s.row; p.col=s.col; p.placed=s.placed; p.x=s.x; p.y=s.y; });
+  selected=null; reviewMode=false; document.body.classList.remove('review');
+  render(); reviewBar.style.display='none'; snapshot=null;
+}
+document.getElementById('reviewClose').onclick=closeReview;
 
 // ---------- init ----------
 let resizeTimer=null;
@@ -670,6 +891,8 @@ window.addEventListener('orientationchange', ()=>{ if(!drag) layout(); });
 const now=new Date();
 setDate(now.getMonth(), now.getDate());
 layout();
+updateTimer();
+refreshBoard();
 </script>
 </body>
 </html>
