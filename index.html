@@ -697,7 +697,10 @@ document.getElementById('clearBtn').onclick=()=>{
   pieces.forEach((p,i)=>{ const s=defaultTraySlot(i); p.placed=false; p.x=s.x; p.y=s.y;
     p.ori=normalize(PIECE_DEFS[p.name].cells); });
   selected=null; clearHints(); showMsg('',''); render();
-  resetRun();                                   // fresh puzzle attempt → reset the timer/flags
+  // Clearing mid-attempt is a convenience for starting over on the board when
+  // you're stuck — keep the timer running so it still counts. Only a finished
+  // run (solved, or auto-solved/void) resets, so "Clear to try for a time" works.
+  if(run.state==='done'||run.state==='void') resetRun();
 };
 
 // ---------- date controls ----------
